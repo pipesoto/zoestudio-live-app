@@ -151,7 +151,7 @@ app.get("/api/public/stream", async (req, res) => {
 app.post("/api/public/reserve", async (req, res) => {
   const productId = Number(req.body?.productId);
   const customerName = normalizeText(req.body?.customerName, 120);
-  const district = normalizeText(req.body?.district, 120);
+  const address = normalizeText(req.body?.address || req.body?.district, 180);
 
   if (!Number.isInteger(productId) || productId <= 0) {
     return res.status(400).json({ error: "Producto inválido" });
@@ -159,8 +159,8 @@ app.post("/api/public/reserve", async (req, res) => {
   if (!customerName || customerName.length < 2) {
     return res.status(400).json({ error: "Nombre inválido" });
   }
-  if (!district || district.length < 2) {
-    return res.status(400).json({ error: "Comuna inválida" });
+  if (!address || address.length < 5) {
+    return res.status(400).json({ error: "Dirección inválida" });
   }
 
   const client = await pool.connect();
@@ -195,11 +195,11 @@ app.post("/api/public/reserve", async (req, res) => {
     await client.query(
       `INSERT INTO orders (product_id, product_code, customer_name, district, reserved_price)
        VALUES ($1, $2, $3, $4, $5)`,
-      [product.id, product.code, customerName, district, product.price]
+      [product.id, product.code, customerName, address, product.price]
     );
     await client.query("COMMIT");
 
-    const text = `Hola Zoe Studio, soy ${customerName}, reservé el producto ${product.code} para la comuna de ${district}. Envíame los datos para pagar $ ${product.price}`;
+    const text = `Hola Zoe Studio, soy ${customerName}, reservé el producto ${product.code} para la dirección ${address}. Envíame los datos para pagar $ ${product.price}`;
     const whatsappUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
     await broadcastStock();
     return res.json({ ok: true, whatsappUrl });
@@ -269,6 +269,8 @@ app.patch("/api/admin/products/:id", requireAdmin, async (req, res) => {
   const name = normalizeText(req.body?.name, 120);
   const price = Number(req.body?.price);
   const imageUrl = normalizeText(req.body?.imageUrl, 500);
+  const initialStock = Number(req.body?.initialStock);
+  const currentStock = Number(req.body?.currentStock);
 
   if (!Number.isInteger(productId) || productId <= 0) {
     return res.status(400).json({ error: "ID inválido" });
@@ -285,14 +287,24 @@ app.patch("/api/admin/products/:id", requireAdmin, async (req, res) => {
   if (!isValidImageUrl(imageUrl)) {
     return res.status(400).json({ error: "URL de imagen inválida" });
   }
+  if (!isPositiveInt(initialStock)) {
+    return res.status(400).json({ error: "Stock inicial inválido" });
+  }
+  if (!isPositiveInt(currentStock)) {
+    return res.status(400).json({ error: "Stock actual inválido" });
+  }
+  if (currentStock > initialStock) {
+    return res.status(400).json({ error: "Stock actual no puede ser mayor al stock inicial" });
+  }
 
   try {
     const result = await pool.query(
       `UPDATE products
-       SET code = $1, name = $2, price = $3, image_url = $4, updated_at = NOW()
-       WHERE id = $5
+       SET code = $1, name = $2, price = $3, image_url = $4,
+           initial_stock = $5, current_stock = $6, updated_at = NOW()
+       WHERE id = $7
        RETURNING id`,
-      [code.toUpperCase(), name, price, imageUrl, productId]
+      [code.toUpperCase(), name, price, imageUrl, initialStock, currentStock, productId]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: "Producto no encontrado" });

@@ -3,7 +3,7 @@ const reserveModal = document.getElementById("reserveModal");
 const reserveForm = document.getElementById("reserveForm");
 const modalProductInfo = document.getElementById("modalProductInfo");
 const customerNameInput = document.getElementById("customerName");
-const districtInput = document.getElementById("district");
+const addressInput = document.getElementById("address");
 const statusBar = document.getElementById("statusBar");
 const cancelBtn = document.getElementById("cancelBtn");
 
@@ -100,9 +100,9 @@ reserveForm.addEventListener("submit", async (event) => {
   if (!selectedProduct) return;
 
   const customerName = customerNameInput.value.trim();
-  const district = districtInput.value.trim();
-  if (customerName.length < 2 || district.length < 2) {
-    notify("Ingresa nombre y comuna válidos.", true);
+  const address = addressInput.value.trim();
+  if (customerName.length < 2 || address.length < 5) {
+    notify("Ingresa nombre y dirección válidos.", true);
     return;
   }
 
@@ -112,7 +112,7 @@ reserveForm.addEventListener("submit", async (event) => {
     body: JSON.stringify({
       productId: selectedProduct.id,
       customerName,
-      district
+      address
     })
   });
   const data = await response.json();

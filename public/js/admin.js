@@ -110,6 +110,8 @@ function renderProducts(products) {
       const currentName = product.name || "";
       const currentPrice = product.price || "";
       const currentImageUrl = product.image_url || "";
+      const currentInitialStock = product.initial_stock ?? 0;
+      const currentCurrentStock = product.current_stock ?? 0;
 
       const code = prompt("Código del producto", currentCode);
       if (code === null) return;
@@ -119,6 +121,10 @@ function renderProducts(products) {
       if (priceValue === null) return;
       const imageUrl = prompt("URL de imagen", currentImageUrl);
       if (imageUrl === null) return;
+      const initialStockValue = prompt("Stock inicial", String(currentInitialStock));
+      if (initialStockValue === null) return;
+      const currentStockValue = prompt("Stock actual", String(currentCurrentStock));
+      if (currentStockValue === null) return;
 
       try {
         const response = await adminFetch(`/api/admin/products/${id}`, {
@@ -128,7 +134,9 @@ function renderProducts(products) {
             code: code.trim(),
             name: name.trim(),
             price: Number(priceValue),
-            imageUrl: imageUrl.trim()
+            imageUrl: imageUrl.trim(),
+            initialStock: Number(initialStockValue),
+            currentStock: Number(currentStockValue)
           })
         });
         const data = await response.json();
