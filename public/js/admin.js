@@ -4,9 +4,17 @@ const productForm = document.getElementById("productForm");
 const productsTbody = document.getElementById("productsTbody");
 const ordersTbody = document.getElementById("ordersTbody");
 const adminMessage = document.getElementById("adminMessage");
+const campaignNameInput = document.getElementById("campaignName");
+const createCampaignBtn = document.getElementById("createCampaignBtn");
+const campaignSelect = document.getElementById("campaignSelect");
+const activateCampaignBtn = document.getElementById("activateCampaignBtn");
+const exportDayInput = document.getElementById("exportDay");
+const exportOrdersBtn = document.getElementById("exportOrdersBtn");
+const exportSummaryBtn = document.getElementById("exportSummaryBtn");
 
 let adminToken = localStorage.getItem("zoe_admin_token") || "";
 let cachedProducts = [];
+let cachedCampaigns = [];
 
 function normalizeProduct(product) {
   return {
@@ -45,6 +53,54 @@ function adminFetch(path, options = {}) {
     "x-admin-token": adminToken
   };
   return fetch(path, { ...options, headers });
+}
+
+function normalizeCampaign(campaign) {
+  return {
+    ...campaign,
+    id: Number(campaign.id)
+  };
+}
+
+function renderCampaignControls(campaigns) {
+  if (!campaignSelect) return;
+  cachedCampaigns = (campaigns || []).map(normalizeCampaign);
+
+  const previousSelection = campaignSelect.value;
+  campaignSelect.innerHTML = cachedCampaigns
+    .map((campaign) => {
+      const label = `${campaign.name} (#${campaign.id})${campaign.is_active ? " · ACTIVA" : ""}`;
+      return `<option value="${campaign.id}">${escapeHtml(label)}</option>`;
+    })
+    .join("");
+
+  const stillExists = cachedCampaigns.some((campaign) => String(campaign.id) === previousSelection);
+  if (stillExists) {
+    campaignSelect.value = previousSelection;
+    return;
+  }
+
+  const active = cachedCampaigns.find((campaign) => campaign.is_active);
+  if (active) {
+    campaignSelect.value = String(active.id);
+  }
+}
+
+async function downloadCsv(path) {
+  const response = await adminFetch(path);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "No se pudo descargar el archivo");
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "export.csv";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function renderProducts(products) {
@@ -173,12 +229,14 @@ function renderProducts(products) {
 function renderOrders(orders) {
   ordersTbody.innerHTML = orders
     .map((o) => {
+      const safeCampaignName = escapeHtml(o.campaign_name || "");
       const safeProductCode = escapeHtml(o.product_code);
       const safeProductName = escapeHtml(o.product_name);
       const safeCustomerName = escapeHtml(o.customer_name);
       const safeDistrict = escapeHtml(o.district);
       return `
       <tr class="border-b border-zinc-100">
+        <td class="py-2 pr-2">${safeCampaignName}</td>
         <td class="py-2 pr-2">${new Date(o.created_at).toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}</td>
         <td class="py-2 pr-2">${safeProductCode} - ${safeProductName}</td>
         <td class="py-2 pr-2">${safeCustomerName}</td>
@@ -192,6 +250,7 @@ function renderOrders(orders) {
 function renderSnapshot(snapshot) {
   renderProducts(snapshot.products || []);
   renderOrders(snapshot.orders || []);
+  renderCampaignControls(snapshot.campaigns || cachedCampaigns);
 }
 
 async function loadSnapshot() {
@@ -229,6 +288,81 @@ productForm.addEventListener("submit", async (event) => {
     renderSnapshot(data);
     productForm.reset();
     showMessage("Producto agregado correctamente.");
+  } catch (error) {
+    showMessage(error.message, true);
+  }
+});
+
+createCampaignBtn?.addEventListener("click", async () => {
+  const name = campaignNameInput.value.trim();
+  if (name.length < 3) {
+    showMessage("Nombre de campaña demasiado corto.", true);
+    return;
+  }
+
+  try {
+    const response = await adminFetch("/api/admin/campaigns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "No se pudo crear campaña");
+    campaignNameInput.value = "";
+    renderSnapshot(data);
+    showMessage("Campaña creada. Actívala antes del live.");
+  } catch (error) {
+    showMessage(error.message, true);
+  }
+});
+
+activateCampaignBtn?.addEventListener("click", async () => {
+  const campaignId = Number(campaignSelect.value);
+  if (!Number.isInteger(campaignId) || campaignId <= 0) {
+    showMessage("Selecciona una campaña válida.", true);
+    return;
+  }
+
+  try {
+    const response = await adminFetch(`/api/admin/campaigns/${campaignId}/activate`, { method: "PATCH" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "No se pudo activar campaña");
+    renderSnapshot(data);
+    showMessage("Campaña activada.");
+  } catch (error) {
+    showMessage(error.message, true);
+  }
+});
+
+exportOrdersBtn?.addEventListener("click", async () => {
+  const campaignId = Number(campaignSelect.value);
+  const day = exportDayInput.value;
+  const params = new URLSearchParams();
+  if (Number.isInteger(campaignId) && campaignId > 0) params.set("campaignId", String(campaignId));
+  if (day) params.set("day", day);
+
+  try {
+    await downloadCsv(`/api/admin/export/orders.csv?${params.toString()}`);
+    showMessage("CSV descargado.");
+  } catch (error) {
+    showMessage(error.message, true);
+  }
+});
+
+exportSummaryBtn?.addEventListener("click", async () => {
+  const campaignId = Number(campaignSelect.value);
+  const day = exportDayInput.value;
+  if (!Number.isInteger(campaignId) || campaignId <= 0) {
+    showMessage("Selecciona una campaña para el resumen.", true);
+    return;
+  }
+
+  const params = new URLSearchParams({ campaignId: String(campaignId) });
+  if (day) params.set("day", day);
+
+  try {
+    await downloadCsv(`/api/admin/export/customers-summary.csv?${params.toString()}`);
+    showMessage("Resumen descargado.");
   } catch (error) {
     showMessage(error.message, true);
   }

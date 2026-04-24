@@ -69,26 +69,53 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+async function fetchCampaigns() {
+  const result = await pool.query(
+    `SELECT id, name, is_active, created_at
+     FROM campaigns
+     ORDER BY id DESC`
+  );
+  return result.rows;
+}
+
+function csvEscape(value) {
+  const text = value === null || value === undefined ? "" : String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return text;
+}
+
+function buildCsv(rows, columns) {
+  const header = columns.map((col) => csvEscape(col.header)).join(",");
+  const lines = rows.map((row) => columns.map((col) => csvEscape(col.value(row))).join(","));
+  return `${header}\n${lines.join("\n")}\n`;
+}
+
 async function fetchAdminSnapshot() {
-  const [productsResult, ordersResult] = await Promise.all([
+  const [productsResult, ordersResult, campaignsResult] = await Promise.all([
     pool.query(
       `SELECT id, code, name, price, initial_stock, current_stock, image_url, is_active, created_at, updated_at
        FROM products
        ORDER BY id DESC`
     ),
     pool.query(
-      `SELECT o.id, o.product_id, o.product_code, o.customer_name, o.district, o.reserved_price, o.created_at,
-              p.name AS product_name
+      `SELECT o.id, o.campaign_id, o.product_id, o.product_code, o.customer_name, o.district, o.reserved_price, o.created_at,
+              p.name AS product_name,
+              c.name AS campaign_name
        FROM orders o
        JOIN products p ON p.id = o.product_id
+       JOIN campaigns c ON c.id = o.campaign_id
        ORDER BY o.created_at DESC
        LIMIT 150`
-    )
+    ),
+    fetchCampaigns()
   ]);
 
   return {
     products: productsResult.rows,
-    orders: ordersResult.rows
+    orders: ordersResult.rows,
+    campaigns: campaignsResult
   };
 }
 
@@ -166,6 +193,19 @@ app.post("/api/public/reserve", async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const campaignResult = await client.query(
+      `SELECT id
+       FROM campaigns
+       WHERE is_active = TRUE
+       LIMIT 1
+       FOR UPDATE`
+    );
+    const campaign = campaignResult.rows[0];
+    if (!campaign) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "No hay campaña activa. Activa una campaña en el panel admin." });
+    }
+
     const productResult = await client.query(
       `SELECT id, code, name, price, current_stock, is_active
        FROM products
@@ -193,9 +233,9 @@ app.post("/api/public/reserve", async (req, res) => {
     );
 
     await client.query(
-      `INSERT INTO orders (product_id, product_code, customer_name, district, reserved_price)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [product.id, product.code, customerName, address, product.price]
+      `INSERT INTO orders (campaign_id, product_id, product_code, customer_name, district, reserved_price)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [campaign.id, product.id, product.code, customerName, address, product.price]
     );
     await client.query("COMMIT");
 
@@ -369,6 +409,182 @@ app.patch("/api/admin/products/:id/toggle", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "No se pudo actualizar estado" });
+  }
+});
+
+app.get("/api/admin/campaigns", requireAdmin, async (req, res) => {
+  try {
+    const campaigns = await fetchCampaigns();
+    res.json({ campaigns });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "No se pudo cargar campañas" });
+  }
+});
+
+app.post("/api/admin/campaigns", requireAdmin, async (req, res) => {
+  const name = normalizeText(req.body?.name, 160);
+  if (!name || name.length < 3) {
+    return res.status(400).json({ error: "Nombre de campaña inválido" });
+  }
+
+  try {
+    await pool.query(`INSERT INTO campaigns (name, is_active) VALUES ($1, FALSE)`, [name]);
+    const snapshot = await fetchAdminSnapshot();
+    res.status(201).json(snapshot);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "No se pudo crear la campaña" });
+  }
+});
+
+app.patch("/api/admin/campaigns/:id/activate", requireAdmin, async (req, res) => {
+  const campaignId = Number(req.params.id);
+  if (!Number.isInteger(campaignId) || campaignId <= 0) {
+    return res.status(400).json({ error: "ID inválido" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const exists = await client.query(`SELECT id FROM campaigns WHERE id = $1 FOR UPDATE`, [campaignId]);
+    if (exists.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Campaña no encontrada" });
+    }
+    await client.query(`UPDATE campaigns SET is_active = FALSE`);
+    await client.query(`UPDATE campaigns SET is_active = TRUE WHERE id = $1`, [campaignId]);
+    await client.query("COMMIT");
+
+    const snapshot = await fetchAdminSnapshot();
+    res.json(snapshot);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error(error);
+    res.status(500).json({ error: "No se pudo activar la campaña" });
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/admin/export/orders.csv", requireAdmin, async (req, res) => {
+  const campaignId = req.query.campaignId ? Number(req.query.campaignId) : null;
+  const day = normalizeText(req.query.day || "", 10);
+
+  if (campaignId !== null && (!Number.isInteger(campaignId) || campaignId <= 0)) {
+    return res.status(400).send("campaignId inválido");
+  }
+  if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return res.status(400).send("day inválido (usa YYYY-MM-DD)");
+  }
+
+  const conditions = [];
+  const params = [];
+  let idx = 1;
+
+  if (campaignId) {
+    conditions.push(`o.campaign_id = $${idx++}`);
+    params.push(campaignId);
+  }
+  if (day) {
+    conditions.push(`(o.created_at AT TIME ZONE 'America/Santiago')::date = $${idx++}::date`);
+    params.push(day);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  try {
+    const result = await pool.query(
+      `SELECT o.id, o.created_at, c.name AS campaign_name, o.product_code, p.name AS product_name,
+              o.customer_name, o.district, o.reserved_price
+       FROM orders o
+       JOIN products p ON p.id = o.product_id
+       JOIN campaigns c ON c.id = o.campaign_id
+       ${whereClause}
+       ORDER BY o.created_at ASC`,
+      params
+    );
+
+    const csv = buildCsv(result.rows, [
+      { header: "id", value: (row) => row.id },
+      { header: "fecha_hora_utc", value: (row) => new Date(row.created_at).toISOString() },
+      { header: "campaña", value: (row) => row.campaign_name },
+      { header: "codigo_producto", value: (row) => row.product_code },
+      { header: "nombre_producto", value: (row) => row.product_name },
+      { header: "clienta", value: (row) => row.customer_name },
+      { header: "direccion", value: (row) => row.district },
+      { header: "precio_reservado", value: (row) => row.reserved_price }
+    ]);
+
+    const suffixParts = [];
+    if (campaignId) suffixParts.push(`campana-${campaignId}`);
+    if (day) suffixParts.push(`dia-${day}`);
+    const suffix = suffixParts.length ? `-${suffixParts.join("-")}` : "";
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="reservas${suffix}.csv"`);
+    res.send(`\ufeff${csv}`);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("No se pudo exportar CSV");
+  }
+});
+
+app.get("/api/admin/export/customers-summary.csv", requireAdmin, async (req, res) => {
+  const campaignId = req.query.campaignId ? Number(req.query.campaignId) : null;
+  const day = normalizeText(req.query.day || "", 10);
+
+  if (!campaignId || !Number.isInteger(campaignId) || campaignId <= 0) {
+    return res.status(400).send("campaignId es obligatorio para el resumen");
+  }
+  if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return res.status(400).send("day inválido (usa YYYY-MM-DD)");
+  }
+
+  const conditions = [`o.campaign_id = $1`];
+  const params = [campaignId];
+  let idx = 2;
+
+  if (day) {
+    conditions.push(`(o.created_at AT TIME ZONE 'America/Santiago')::date = $${idx++}::date`);
+    params.push(day);
+  }
+
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+  try {
+    const result = await pool.query(
+      `SELECT o.customer_name,
+              o.district,
+              COUNT(*)::int AS reservas,
+              SUM(o.reserved_price)::bigint AS total,
+              STRING_AGG(o.product_code || ' ' || p.name, ' | ' ORDER BY o.created_at) AS productos
+       FROM orders o
+       JOIN products p ON p.id = o.product_id
+       ${whereClause}
+       GROUP BY o.customer_name, o.district
+       ORDER BY MIN(o.created_at) ASC`,
+      params
+    );
+
+    const csv = buildCsv(result.rows, [
+      { header: "clienta", value: (row) => row.customer_name },
+      { header: "direccion", value: (row) => row.district },
+      { header: "reservas", value: (row) => row.reservas },
+      { header: "total", value: (row) => row.total },
+      { header: "productos", value: (row) => row.productos }
+    ]);
+
+    const daySuffix = day ? `-dia-${day}` : "";
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="resumen-clientas-campana-${campaignId}${daySuffix}.csv"`
+    );
+    res.send(`\ufeff${csv}`);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("No se pudo exportar resumen");
   }
 });
 

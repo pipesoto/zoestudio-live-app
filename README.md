@@ -27,11 +27,33 @@ Usa `.env.example` como base:
    - `npm run dev` (local)
    - `npm start` (producción/Railway)
 
+## Migraciones (bases ya existentes)
+
+Si tu base ya tenía tablas creadas con `schema.sql` anterior, ejecuta:
+
+- `psql "$DATABASE_URL" -f migration_campaigns.sql`
+
+Esto agrega campañas y etiqueta pedidos históricos bajo la campaña `General`.
+
+## Campañas y exportación
+
+- Cada live se modela como una **campaña** en `/admin`.
+- Solo puede existir **una campaña activa** a la vez.
+- Cada reserva guarda `campaign_id` de la campaña activa en ese momento.
+- Exporta CSV:
+  - detalle de reservas
+  - resumen agrupado por clienta + dirección (ideal para armar envíos)
+
 ## Rutas
 
 - `/` -> catálogo público de clientas
 - `/admin` -> panel privado (token manual en la interfaz)
 - `/health` -> salud del servicio
+
+## Endpoints admin (CSV)
+
+- `GET /api/admin/export/orders.csv?campaignId=ID&day=YYYY-MM-DD`
+- `GET /api/admin/export/customers-summary.csv?campaignId=ID&day=YYYY-MM-DD`
 
 ## Seguridad y concurrencia
 

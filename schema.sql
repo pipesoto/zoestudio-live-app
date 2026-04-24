@@ -1,3 +1,18 @@
+CREATE TABLE IF NOT EXISTS campaigns (
+  id BIGSERIAL PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_campaigns_one_active
+  ON campaigns (is_active)
+  WHERE is_active = TRUE;
+
+INSERT INTO campaigns (name, is_active)
+SELECT 'General', TRUE
+WHERE NOT EXISTS (SELECT 1 FROM campaigns WHERE name = 'General');
+
 CREATE TABLE IF NOT EXISTS products (
   id BIGSERIAL PRIMARY KEY,
   code VARCHAR(20) UNIQUE NOT NULL,
@@ -13,6 +28,7 @@ CREATE TABLE IF NOT EXISTS products (
 
 CREATE TABLE IF NOT EXISTS orders (
   id BIGSERIAL PRIMARY KEY,
+  campaign_id BIGINT NOT NULL REFERENCES campaigns(id) ON DELETE RESTRICT,
   product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
   product_code VARCHAR(20) NOT NULL,
   customer_name VARCHAR(120) NOT NULL,
@@ -24,3 +40,5 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
 CREATE INDEX IF NOT EXISTS idx_orders_product_id ON orders(product_id);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_campaign_id ON orders(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_orders_campaign_created_at ON orders(campaign_id, created_at DESC);
