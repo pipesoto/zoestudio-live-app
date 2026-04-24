@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zoe Studio | Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-zinc-100 text-zinc-900">
+    <main class="mx-auto max-w-7xl p-4 sm:p-6">
+      <header class="mb-5 rounded-2xl bg-white p-5 shadow-sm">
+        <h1 class="text-2xl font-bold sm:text-3xl">Panel Admin - Zoe Studio</h1>
+        <p class="mt-1 text-sm text-zinc-600">Gestión de productos, activación y monitoreo de reservas en vivo.</p>
+      </header>
+
+      <section class="mb-5 rounded-2xl bg-white p-5 shadow-sm">
+        <h2 class="text-lg font-semibold">Acceso</h2>
+        <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+          <input id="adminToken" placeholder="ADMIN_TOKEN" class="w-full rounded-lg border border-zinc-300 p-2.5" />
+          <button id="saveTokenBtn" class="rounded-lg bg-black px-4 py-2 text-white">Guardar token</button>
+        </div>
+      </section>
+
+      <section class="mb-5 rounded-2xl bg-white p-5 shadow-sm">
+        <h2 class="text-lg font-semibold">Maestro de productos</h2>
+        <form id="productForm" class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <input id="code" placeholder="Código (A1)" class="rounded-lg border border-zinc-300 p-2.5" required />
+          <input id="name" placeholder="Nombre" class="rounded-lg border border-zinc-300 p-2.5" required />
+          <input id="price" type="number" min="0" placeholder="Precio" class="rounded-lg border border-zinc-300 p-2.5" required />
+          <input id="initialStock" type="number" min="0" placeholder="Stock inicial" class="rounded-lg border border-zinc-300 p-2.5" required />
+          <input id="imageUrl" placeholder="URL imagen" class="rounded-lg border border-zinc-300 p-2.5 lg:col-span-2" required />
+          <button class="rounded-lg bg-black px-4 py-2 font-medium text-white lg:col-span-1">Agregar</button>
+        </form>
+      </section>
+
+      <section class="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <article class="rounded-2xl bg-white p-5 shadow-sm">
+          <h3 class="text-lg font-semibold">Productos y stock</h3>
+          <div class="mt-3 overflow-auto">
+            <table class="w-full min-w-[640px] text-sm">
+              <thead class="border-b border-zinc-200 text-left">
+                <tr>
+                  <th class="py-2">Código</th>
+                  <th class="py-2">Nombre</th>
+                  <th class="py-2">Precio</th>
+                  <th class="py-2">Stock</th>
+                  <th class="py-2">Estado</th>
+                </tr>
+              </thead>
+              <tbody id="productsTbody"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="rounded-2xl bg-white p-5 shadow-sm">
+          <h3 class="text-lg font-semibold">Reservas recientes</h3>
+          <div class="mt-3 overflow-auto">
+            <table class="w-full min-w-[640px] text-sm">
+              <thead class="border-b border-zinc-200 text-left">
+                <tr>
+                  <th class="py-2">Hora</th>
+                  <th class="py-2">Producto</th>
+                  <th class="py-2">Clienta</th>
+                  <th class="py-2">Comuna</th>
+                  <th class="py-2">Monto</th>
+                </tr>
+              </thead>
+              <tbody id="ordersTbody"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+      <section id="adminMessage" class="mt-4 hidden rounded-lg bg-zinc-200 p-3 text-sm"></section>
+    </main>
+    <script src="/js/admin.js" defer></script>
+  </body>
+  </html>
