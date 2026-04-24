@@ -10,6 +10,13 @@ const cancelBtn = document.getElementById("cancelBtn");
 let selectedProduct = null;
 let products = [];
 
+function normalizeProduct(product) {
+  return {
+    ...product,
+    id: Number(product.id)
+  };
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -78,7 +85,7 @@ function renderProducts(list) {
 async function loadProducts() {
   const response = await fetch("/api/public/products");
   const data = await response.json();
-  products = data.products || [];
+  products = (data.products || []).map(normalizeProduct);
   renderProducts(products);
 }
 
@@ -128,7 +135,7 @@ function initRealtime() {
   source.onmessage = (event) => {
     const payload = JSON.parse(event.data);
     if (payload.type === "stock") {
-      products = payload.products || [];
+      products = (payload.products || []).map(normalizeProduct);
       renderProducts(products);
     }
   };

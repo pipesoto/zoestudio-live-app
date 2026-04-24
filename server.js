@@ -263,6 +263,77 @@ app.post("/api/admin/products", requireAdmin, async (req, res) => {
   }
 });
 
+app.patch("/api/admin/products/:id", requireAdmin, async (req, res) => {
+  const productId = Number(req.params.id);
+  const code = normalizeText(req.body?.code, 20);
+  const name = normalizeText(req.body?.name, 120);
+  const price = Number(req.body?.price);
+  const imageUrl = normalizeText(req.body?.imageUrl, 500);
+
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return res.status(400).json({ error: "ID inválido" });
+  }
+  if (!isSafeProductCode(code)) {
+    return res.status(400).json({ error: "Código inválido. Usa letras, números, - o _." });
+  }
+  if (!name || name.length < 3) {
+    return res.status(400).json({ error: "Nombre inválido" });
+  }
+  if (!isPositiveInt(price)) {
+    return res.status(400).json({ error: "Precio inválido" });
+  }
+  if (!isValidImageUrl(imageUrl)) {
+    return res.status(400).json({ error: "URL de imagen inválida" });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE products
+       SET code = $1, name = $2, price = $3, image_url = $4, updated_at = NOW()
+       WHERE id = $5
+       RETURNING id`,
+      [code.toUpperCase(), name, price, imageUrl, productId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+    const snapshot = await fetchAdminSnapshot();
+    await broadcastStock();
+    return res.json(snapshot);
+  } catch (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "El código ya existe" });
+    }
+    console.error(error);
+    return res.status(500).json({ error: "No se pudo editar el producto" });
+  }
+});
+
+app.delete("/api/admin/products/:id", requireAdmin, async (req, res) => {
+  const productId = Number(req.params.id);
+  if (!Number.isInteger(productId) || productId <= 0) {
+    return res.status(400).json({ error: "ID inválido" });
+  }
+
+  try {
+    const result = await pool.query(`DELETE FROM products WHERE id = $1`, [productId]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+    const snapshot = await fetchAdminSnapshot();
+    await broadcastStock();
+    return res.json(snapshot);
+  } catch (error) {
+    if (error.code === "23503") {
+      return res
+        .status(409)
+        .json({ error: "No se puede eliminar: este producto ya tiene reservas asociadas." });
+    }
+    console.error(error);
+    return res.status(500).json({ error: "No se pudo eliminar el producto" });
+  }
+});
+
 app.patch("/api/admin/products/:id/toggle", requireAdmin, async (req, res) => {
   const productId = Number(req.params.id);
   if (!Number.isInteger(productId) || productId <= 0) {

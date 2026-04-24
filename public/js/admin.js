@@ -6,6 +6,14 @@ const ordersTbody = document.getElementById("ordersTbody");
 const adminMessage = document.getElementById("adminMessage");
 
 let adminToken = localStorage.getItem("zoe_admin_token") || "";
+let cachedProducts = [];
+
+function normalizeProduct(product) {
+  return {
+    ...product,
+    id: Number(product.id)
+  };
+}
 
 if (adminToken) tokenInput.value = adminToken;
 
@@ -40,6 +48,7 @@ function adminFetch(path, options = {}) {
 }
 
 function renderProducts(products) {
+  cachedProducts = products.map(normalizeProduct);
   productsTbody.innerHTML = products
     .map((p) => {
       const safeCode = escapeHtml(p.code);
@@ -57,6 +66,19 @@ function renderProducts(products) {
             ${p.is_active ? "Publicado" : "Oculto"}
           </button>
         </td>
+        <td class="py-2 pr-2">
+          <div class="flex gap-2">
+            <button
+              data-id="${p.id}"
+              class="edit-btn rounded-lg bg-blue-100 px-2.5 py-1 text-xs text-blue-800"
+            >
+              Editar
+            </button>
+            <button data-id="${p.id}" class="delete-btn rounded-lg bg-red-100 px-2.5 py-1 text-xs text-red-700">
+              Eliminar
+            </button>
+          </div>
+        </td>
       </tr>`;
     })
     .join("");
@@ -69,6 +91,70 @@ function renderProducts(products) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Error al cambiar estado");
         renderSnapshot(data);
+      } catch (error) {
+        showMessage(error.message, true);
+      }
+    });
+  });
+
+  document.querySelectorAll(".edit-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.dataset.id);
+      const product = cachedProducts.find((item) => item.id === id);
+      if (!product) {
+        showMessage("No se encontró el producto seleccionado.", true);
+        return;
+      }
+
+      const currentCode = product.code || "";
+      const currentName = product.name || "";
+      const currentPrice = product.price || "";
+      const currentImageUrl = product.image_url || "";
+
+      const code = prompt("Código del producto", currentCode);
+      if (code === null) return;
+      const name = prompt("Nombre del producto", currentName);
+      if (name === null) return;
+      const priceValue = prompt("Precio (solo número)", String(currentPrice));
+      if (priceValue === null) return;
+      const imageUrl = prompt("URL de imagen", currentImageUrl);
+      if (imageUrl === null) return;
+
+      try {
+        const response = await adminFetch(`/api/admin/products/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            code: code.trim(),
+            name: name.trim(),
+            price: Number(priceValue),
+            imageUrl: imageUrl.trim()
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "No se pudo editar producto");
+        renderSnapshot(data);
+        showMessage("Producto editado correctamente.");
+      } catch (error) {
+        showMessage(error.message, true);
+      }
+    });
+  });
+
+  document.querySelectorAll(".delete-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.dataset.id);
+      const confirmed = confirm("¿Eliminar este producto? Esta acción no se puede deshacer.");
+      if (!confirmed) return;
+
+      try {
+        const response = await adminFetch(`/api/admin/products/${id}`, {
+          method: "DELETE"
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "No se pudo eliminar producto");
+        renderSnapshot(data);
+        showMessage("Producto eliminado correctamente.");
       } catch (error) {
         showMessage(error.message, true);
       }
