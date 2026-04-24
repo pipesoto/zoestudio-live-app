@@ -6,9 +6,35 @@ const customerNameInput = document.getElementById("customerName");
 const addressInput = document.getElementById("address");
 const statusBar = document.getElementById("statusBar");
 const cancelBtn = document.getElementById("cancelBtn");
+const whatsappFallback = document.getElementById("whatsappFallback");
+const whatsappLink = document.getElementById("whatsappLink");
 
 let selectedProduct = null;
 let products = [];
+
+function isAppleMobile() {
+  const ua = navigator.userAgent || "";
+  return /iPhone|iPad|iPod/i.test(ua);
+}
+
+function openWhatsAppUrl(url) {
+  if (!url) return;
+
+  if (isAppleMobile()) {
+    window.location.assign(url);
+    return;
+  }
+
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    if (whatsappLink && whatsappFallback) {
+      whatsappLink.href = url;
+      whatsappFallback.classList.remove("hidden");
+    } else {
+      window.location.assign(url);
+    }
+  }
+}
 
 function normalizeProduct(product) {
   return {
@@ -75,6 +101,7 @@ function renderProducts(list) {
       const id = Number(btn.dataset.id);
       selectedProduct = products.find((p) => p.id === id);
       if (!selectedProduct) return;
+      if (whatsappFallback) whatsappFallback.classList.add("hidden");
       modalProductInfo.textContent = `${selectedProduct.code} - ${selectedProduct.name} ($ ${formatCLP(selectedProduct.price)})`;
       reserveModal.classList.remove("hidden");
       reserveModal.classList.add("flex");
@@ -127,7 +154,8 @@ reserveForm.addEventListener("submit", async (event) => {
   reserveModal.classList.add("hidden");
   reserveModal.classList.remove("flex");
   reserveForm.reset();
-  window.open(data.whatsappUrl, "_blank");
+  if (whatsappFallback) whatsappFallback.classList.add("hidden");
+  openWhatsAppUrl(data.whatsappUrl);
 });
 
 function initRealtime() {
