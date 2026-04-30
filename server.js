@@ -252,6 +252,121 @@ app.post("/api/public/reserve", async (req, res) => {
   }
 });
 
+app.post("/api/public/reserve-batch", async (req, res) => {
+  const customerName = normalizeText(req.body?.customerName, 120);
+  const address = normalizeText(req.body?.address, 180);
+  const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+
+  if (!customerName || customerName.length < 2) {
+    return res.status(400).json({ error: "Nombre inválido" });
+  }
+  if (!address || address.length < 5) {
+    return res.status(400).json({ error: "Dirección inválida" });
+  }
+  if (rawItems.length === 0) {
+    return res.status(400).json({ error: "Debes agregar al menos un producto." });
+  }
+  if (rawItems.length > 80) {
+    return res.status(400).json({ error: "Demasiados productos en el pedido." });
+  }
+
+  const quantities = new Map();
+  for (const item of rawItems) {
+    const productId = Number(item?.productId);
+    const qty = Number(item?.qty || 1);
+    if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(qty) || qty <= 0 || qty > 20) {
+      return res.status(400).json({ error: "Productos inválidos en el pedido." });
+    }
+    quantities.set(productId, (quantities.get(productId) || 0) + qty);
+  }
+
+  const productIds = [...quantities.keys()];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const campaignResult = await client.query(
+      `SELECT id
+       FROM campaigns
+       WHERE is_active = TRUE
+       LIMIT 1
+       FOR UPDATE`
+    );
+    const campaign = campaignResult.rows[0];
+    if (!campaign) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "No hay campaña activa. Activa una campaña en el panel admin." });
+    }
+
+    const productResult = await client.query(
+      `SELECT id, code, name, price, current_stock, is_active
+       FROM products
+       WHERE id = ANY($1::bigint[])
+       FOR UPDATE`,
+      [productIds]
+    );
+
+    if (productResult.rowCount !== productIds.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Uno o más productos ya no están disponibles." });
+    }
+
+    const productById = new Map(productResult.rows.map((row) => [Number(row.id), row]));
+    for (const [productId, qty] of quantities.entries()) {
+      const product = productById.get(productId);
+      if (!product || !product.is_active) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Hay productos ocultos o no disponibles en tu pedido." });
+      }
+      if (Number(product.current_stock) < qty) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: `Stock insuficiente para ${product.code}.` });
+      }
+    }
+
+    let total = 0;
+    const summaryLines = [];
+    for (const [productId, qty] of quantities.entries()) {
+      const product = productById.get(productId);
+      await client.query(
+        `UPDATE products
+         SET current_stock = current_stock - $1, updated_at = NOW()
+         WHERE id = $2`,
+        [qty, productId]
+      );
+
+      for (let i = 0; i < qty; i += 1) {
+        await client.query(
+          `INSERT INTO orders (campaign_id, product_id, product_code, customer_name, district, reserved_price)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [campaign.id, product.id, product.code, customerName, address, product.price]
+        );
+      }
+
+      const lineTotal = Number(product.price) * qty;
+      total += lineTotal;
+      summaryLines.push(`- ${product.code} ${product.name} x${qty} ($ ${lineTotal})`);
+    }
+
+    await client.query("COMMIT");
+
+    const text =
+      `Hola Zoe Studio, soy ${customerName}. Reservé en el live:\n` +
+      `${summaryLines.join("\n")}\n` +
+      `Total: $ ${total}\n` +
+      `Dirección: ${address}\n` +
+      "Envíame los datos para pagar.";
+    const whatsappUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
+    await broadcastStock();
+    return res.json({ ok: true, whatsappUrl });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error(error);
+    return res.status(500).json({ error: "No se pudo completar el pedido" });
+  } finally {
+    client.release();
+  }
+});
+
 app.get("/api/admin/snapshot", requireAdmin, async (req, res) => {
   try {
     const snapshot = await fetchAdminSnapshot();
