@@ -61,6 +61,18 @@ function isValidImageUrl(value) {
   }
 }
 
+function normalizeAttributes(raw) {
+  if (!Array.isArray(raw)) return [];
+  const cleaned = [];
+  for (const item of raw) {
+    const key = normalizeText(item?.key, 40);
+    const value = normalizeText(item?.value, 100);
+    if (!key || !value) continue;
+    cleaned.push({ key, value });
+  }
+  return cleaned.slice(0, 12);
+}
+
 function requireAdmin(req, res, next) {
   const token = req.header("x-admin-token");
   if (!token || token !== ADMIN_TOKEN) {
@@ -95,7 +107,7 @@ function buildCsv(rows, columns) {
 async function fetchAdminSnapshot() {
   const [productsResult, ordersResult, campaignsResult] = await Promise.all([
     pool.query(
-      `SELECT id, code, name, price, initial_stock, current_stock, image_url, is_active, created_at, updated_at
+      `SELECT id, code, name, color, quantity_label, attributes_json, price, initial_stock, current_stock, image_url, is_active, created_at, updated_at
        FROM products
        ORDER BY id DESC`
     ),
@@ -121,7 +133,7 @@ async function fetchAdminSnapshot() {
 
 async function fetchPublicProducts() {
   const result = await pool.query(
-    `SELECT id, code, name, price, current_stock, image_url
+    `SELECT id, code, name, color, quantity_label, attributes_json, price, current_stock, image_url
      FROM products
      WHERE is_active = TRUE
      ORDER BY id DESC`
@@ -380,6 +392,9 @@ app.get("/api/admin/snapshot", requireAdmin, async (req, res) => {
 app.post("/api/admin/products", requireAdmin, async (req, res) => {
   const code = normalizeText(req.body?.code, 20);
   const name = normalizeText(req.body?.name, 120);
+  const color = normalizeText(req.body?.color, 60);
+  const quantityLabel = normalizeText(req.body?.quantityLabel, 80);
+  const attributes = normalizeAttributes(req.body?.attributes);
   const price = Number(req.body?.price);
   const initialStock = Number(req.body?.initialStock);
   const imageUrl = normalizeText(req.body?.imageUrl, 500);
@@ -402,9 +417,9 @@ app.post("/api/admin/products", requireAdmin, async (req, res) => {
 
   try {
     await pool.query(
-      `INSERT INTO products (code, name, price, initial_stock, current_stock, image_url)
-       VALUES ($1, $2, $3, $4, $4, $5)`,
-      [code.toUpperCase(), name, price, initialStock, imageUrl]
+      `INSERT INTO products (code, name, color, quantity_label, attributes_json, price, initial_stock, current_stock, image_url)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $7, $8)`,
+      [code.toUpperCase(), name, color, quantityLabel, JSON.stringify(attributes), price, initialStock, imageUrl]
     );
     const snapshot = await fetchAdminSnapshot();
     await broadcastStock();
@@ -422,6 +437,9 @@ app.patch("/api/admin/products/:id", requireAdmin, async (req, res) => {
   const productId = Number(req.params.id);
   const code = normalizeText(req.body?.code, 20);
   const name = normalizeText(req.body?.name, 120);
+  const color = normalizeText(req.body?.color, 60);
+  const quantityLabel = normalizeText(req.body?.quantityLabel, 80);
+  const attributes = normalizeAttributes(req.body?.attributes);
   const price = Number(req.body?.price);
   const imageUrl = normalizeText(req.body?.imageUrl, 500);
   const initialStock = Number(req.body?.initialStock);
@@ -455,11 +473,22 @@ app.patch("/api/admin/products/:id", requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE products
-       SET code = $1, name = $2, price = $3, image_url = $4,
-           initial_stock = $5, current_stock = $6, updated_at = NOW()
-       WHERE id = $7
+       SET code = $1, name = $2, color = $3, quantity_label = $4, attributes_json = $5::jsonb, price = $6, image_url = $7,
+           initial_stock = $8, current_stock = $9, updated_at = NOW()
+       WHERE id = $10
        RETURNING id`,
-      [code.toUpperCase(), name, price, imageUrl, initialStock, currentStock, productId]
+      [
+        code.toUpperCase(),
+        name,
+        color,
+        quantityLabel,
+        JSON.stringify(attributes),
+        price,
+        imageUrl,
+        initialStock,
+        currentStock,
+        productId
+      ]
     );
     if (result.rowCount === 0) {
       return res.status(404).json({ error: "Producto no encontrado" });
@@ -584,33 +613,19 @@ app.patch("/api/admin/campaigns/:id/activate", requireAdmin, async (req, res) =>
 
 app.get("/api/admin/export/orders.csv", requireAdmin, async (req, res) => {
   const campaignId = req.query.campaignId ? Number(req.query.campaignId) : null;
-  const day = normalizeText(req.query.day || "", 10);
 
-  if (campaignId !== null && (!Number.isInteger(campaignId) || campaignId <= 0)) {
-    return res.status(400).send("campaignId inválido");
-  }
-  if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
-    return res.status(400).send("day inválido (usa YYYY-MM-DD)");
+  if (!campaignId || !Number.isInteger(campaignId) || campaignId <= 0) {
+    return res.status(400).send("campaignId es obligatorio para exportar");
   }
 
-  const conditions = [];
-  const params = [];
-  let idx = 1;
-
-  if (campaignId) {
-    conditions.push(`o.campaign_id = $${idx++}`);
-    params.push(campaignId);
-  }
-  if (day) {
-    conditions.push(`(o.created_at AT TIME ZONE 'America/Santiago')::date = $${idx++}::date`);
-    params.push(day);
-  }
-
-  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const whereClause = `WHERE o.campaign_id = $1`;
+  const params = [campaignId];
 
   try {
     const result = await pool.query(
       `SELECT o.id, o.created_at, c.name AS campaign_name, o.product_code, p.name AS product_name,
+              p.color AS product_color, p.quantity_label AS product_quantity_label,
+              p.attributes_json AS product_attributes,
               o.customer_name, o.district, o.reserved_price
        FROM orders o
        JOIN products p ON p.id = o.product_id
@@ -626,15 +641,26 @@ app.get("/api/admin/export/orders.csv", requireAdmin, async (req, res) => {
       { header: "campaña", value: (row) => row.campaign_name },
       { header: "codigo_producto", value: (row) => row.product_code },
       { header: "nombre_producto", value: (row) => row.product_name },
+      { header: "color", value: (row) => row.product_color || "" },
+      { header: "cantidad", value: (row) => row.product_quantity_label || "" },
+      {
+        header: "propiedades",
+        value: (row) =>
+          Array.isArray(row.product_attributes)
+            ? row.product_attributes
+                .map((item) => `${item?.key || ""}: ${item?.value || ""}`)
+                .filter(Boolean)
+                .join(" | ")
+            : ""
+      },
       { header: "clienta", value: (row) => row.customer_name },
       { header: "direccion", value: (row) => row.district },
       { header: "precio_reservado", value: (row) => row.reserved_price }
     ]);
 
     const suffixParts = [];
-    if (campaignId) suffixParts.push(`campana-${campaignId}`);
-    if (day) suffixParts.push(`dia-${day}`);
-    const suffix = suffixParts.length ? `-${suffixParts.join("-")}` : "";
+    suffixParts.push(`campana-${campaignId}`);
+    const suffix = `-${suffixParts.join("-")}`;
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="reservas${suffix}.csv"`);
@@ -647,23 +673,13 @@ app.get("/api/admin/export/orders.csv", requireAdmin, async (req, res) => {
 
 app.get("/api/admin/export/customers-summary.csv", requireAdmin, async (req, res) => {
   const campaignId = req.query.campaignId ? Number(req.query.campaignId) : null;
-  const day = normalizeText(req.query.day || "", 10);
 
   if (!campaignId || !Number.isInteger(campaignId) || campaignId <= 0) {
     return res.status(400).send("campaignId es obligatorio para el resumen");
   }
-  if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
-    return res.status(400).send("day inválido (usa YYYY-MM-DD)");
-  }
 
   const conditions = [`o.campaign_id = $1`];
   const params = [campaignId];
-  let idx = 2;
-
-  if (day) {
-    conditions.push(`(o.created_at AT TIME ZONE 'America/Santiago')::date = $${idx++}::date`);
-    params.push(day);
-  }
 
   const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
@@ -673,7 +689,12 @@ app.get("/api/admin/export/customers-summary.csv", requireAdmin, async (req, res
               o.district,
               COUNT(*)::int AS reservas,
               SUM(o.reserved_price)::bigint AS total,
-              STRING_AGG(o.product_code || ' ' || p.name, ' | ' ORDER BY o.created_at) AS productos
+              STRING_AGG(
+                o.product_code || ' ' || p.name ||
+                CASE WHEN p.color <> '' THEN ' (' || p.color || ')' ELSE '' END ||
+                CASE WHEN p.quantity_label <> '' THEN ' [' || p.quantity_label || ']' ELSE '' END,
+                ' | ' ORDER BY o.created_at
+              ) AS productos
        FROM orders o
        JOIN products p ON p.id = o.product_id
        ${whereClause}
@@ -690,11 +711,10 @@ app.get("/api/admin/export/customers-summary.csv", requireAdmin, async (req, res
       { header: "productos", value: (row) => row.productos }
     ]);
 
-    const daySuffix = day ? `-dia-${day}` : "";
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="resumen-clientas-campana-${campaignId}${daySuffix}.csv"`
+      `attachment; filename="resumen-clientas-campana-${campaignId}.csv"`
     );
     res.send(`\ufeff${csv}`);
   } catch (error) {

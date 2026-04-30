@@ -8,9 +8,10 @@ const campaignNameInput = document.getElementById("campaignName");
 const createCampaignBtn = document.getElementById("createCampaignBtn");
 const campaignSelect = document.getElementById("campaignSelect");
 const activateCampaignBtn = document.getElementById("activateCampaignBtn");
-const exportDayInput = document.getElementById("exportDay");
+const activeCampaignInfo = document.getElementById("activeCampaignInfo");
 const exportOrdersBtn = document.getElementById("exportOrdersBtn");
 const exportSummaryBtn = document.getElementById("exportSummaryBtn");
+const attributesTextInput = document.getElementById("attributesText");
 
 let adminToken = localStorage.getItem("zoe_admin_token") || "";
 let cachedProducts = [];
@@ -62,6 +63,34 @@ function normalizeCampaign(campaign) {
   };
 }
 
+function parseAttributesText(text) {
+  if (!text) return [];
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const idx = line.indexOf(":");
+      if (idx <= 0) return null;
+      const key = line.slice(0, idx).trim();
+      const value = line.slice(idx + 1).trim();
+      if (!key || !value) return null;
+      return { key, value };
+    })
+    .filter(Boolean);
+}
+
+function getProductAttributes(product) {
+  const attrs = Array.isArray(product.attributes_json) ? [...product.attributes_json] : [];
+  if (product.color) attrs.unshift({ key: "Color", value: product.color });
+  if (product.quantity_label) attrs.unshift({ key: "Cantidad", value: product.quantity_label });
+  return attrs;
+}
+
+function attributesToText(attributes) {
+  return attributes.map((item) => `${item.key}: ${item.value}`).join("\n");
+}
+
 function renderCampaignControls(campaigns) {
   if (!campaignSelect) return;
   cachedCampaigns = (campaigns || []).map(normalizeCampaign);
@@ -83,6 +112,11 @@ function renderCampaignControls(campaigns) {
   const active = cachedCampaigns.find((campaign) => campaign.is_active);
   if (active) {
     campaignSelect.value = String(active.id);
+    if (activeCampaignInfo) {
+      activeCampaignInfo.textContent = `Campaña activa actual: ${active.name} (#${active.id})`;
+    }
+  } else if (activeCampaignInfo) {
+    activeCampaignInfo.textContent = "Campaña activa actual: ninguna";
   }
 }
 
@@ -109,10 +143,17 @@ function renderProducts(products) {
     .map((p) => {
       const safeCode = escapeHtml(p.code);
       const safeName = escapeHtml(p.name);
+      const attrs = getProductAttributes(p);
+      const attrsHtml = attrs
+        .map((item) => `<span class="mr-1 rounded bg-zinc-100 px-2 py-1">${escapeHtml(item.key)}: ${escapeHtml(item.value)}</span>`)
+        .join("");
       return `
       <tr class="border-b border-zinc-100">
         <td class="py-2 pr-2 font-semibold">${safeCode}</td>
         <td class="py-2 pr-2">${safeName}</td>
+        <td class="py-2 pr-2 text-xs text-zinc-600">
+          ${attrsHtml}
+        </td>
         <td class="py-2 pr-2">$ ${formatCLP(p.price)}</td>
         <td class="py-2 pr-2">${p.current_stock} / ${p.initial_stock}</td>
         <td class="py-2 pr-2">
@@ -164,6 +205,11 @@ function renderProducts(products) {
 
       const currentCode = product.code || "";
       const currentName = product.name || "";
+      const currentColor = product.color || "";
+      const currentQuantityLabel = product.quantity_label || "";
+      const currentAttributesText = attributesToText(
+        getProductAttributes(product).filter((item) => item.key !== "Color" && item.key !== "Cantidad")
+      );
       const currentPrice = product.price || "";
       const currentImageUrl = product.image_url || "";
       const currentInitialStock = product.initial_stock ?? 0;
@@ -173,6 +219,15 @@ function renderProducts(products) {
       if (code === null) return;
       const name = prompt("Nombre del producto", currentName);
       if (name === null) return;
+      const color = prompt("Color (opcional)", currentColor);
+      if (color === null) return;
+      const quantityLabel = prompt("Cantidad (ej: Set x6, opcional)", currentQuantityLabel);
+      if (quantityLabel === null) return;
+      const attributesText = prompt(
+        "Propiedades dinámicas (una por línea: clave: valor)",
+        currentAttributesText
+      );
+      if (attributesText === null) return;
       const priceValue = prompt("Precio (solo número)", String(currentPrice));
       if (priceValue === null) return;
       const imageUrl = prompt("URL de imagen", currentImageUrl);
@@ -189,6 +244,9 @@ function renderProducts(products) {
           body: JSON.stringify({
             code: code.trim(),
             name: name.trim(),
+            color: color.trim(),
+            quantityLabel: quantityLabel.trim(),
+            attributes: parseAttributesText(attributesText),
             price: Number(priceValue),
             imageUrl: imageUrl.trim(),
             initialStock: Number(initialStockValue),
@@ -272,6 +330,9 @@ productForm.addEventListener("submit", async (event) => {
   const payload = {
     code: document.getElementById("code").value.trim(),
     name: document.getElementById("name").value.trim(),
+    color: document.getElementById("color").value.trim(),
+    quantityLabel: document.getElementById("quantityLabel").value.trim(),
+    attributes: parseAttributesText(attributesTextInput?.value || ""),
     price: Number(document.getElementById("price").value),
     initialStock: Number(document.getElementById("initialStock").value),
     imageUrl: document.getElementById("imageUrl").value.trim()
@@ -336,10 +397,11 @@ activateCampaignBtn?.addEventListener("click", async () => {
 
 exportOrdersBtn?.addEventListener("click", async () => {
   const campaignId = Number(campaignSelect.value);
-  const day = exportDayInput.value;
-  const params = new URLSearchParams();
-  if (Number.isInteger(campaignId) && campaignId > 0) params.set("campaignId", String(campaignId));
-  if (day) params.set("day", day);
+  if (!Number.isInteger(campaignId) || campaignId <= 0) {
+    showMessage("Selecciona una campaña para exportar.", true);
+    return;
+  }
+  const params = new URLSearchParams({ campaignId: String(campaignId) });
 
   try {
     await downloadCsv(`/api/admin/export/orders.csv?${params.toString()}`);
@@ -351,14 +413,12 @@ exportOrdersBtn?.addEventListener("click", async () => {
 
 exportSummaryBtn?.addEventListener("click", async () => {
   const campaignId = Number(campaignSelect.value);
-  const day = exportDayInput.value;
   if (!Number.isInteger(campaignId) || campaignId <= 0) {
     showMessage("Selecciona una campaña para el resumen.", true);
     return;
   }
 
   const params = new URLSearchParams({ campaignId: String(campaignId) });
-  if (day) params.set("day", day);
 
   try {
     await downloadCsv(`/api/admin/export/customers-summary.csv?${params.toString()}`);

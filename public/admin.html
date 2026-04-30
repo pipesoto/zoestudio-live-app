@@ -38,20 +38,22 @@
             <label class="text-xs font-semibold text-zinc-500">Campaña activa</label>
             <select id="campaignSelect" class="mt-1 w-full rounded-lg border border-zinc-300 p-2.5"></select>
             <button id="activateCampaignBtn" class="mt-2 w-full rounded-lg bg-emerald-600 px-4 py-2 text-white">Activar seleccionada</button>
+            <p id="activeCampaignInfo" class="mt-2 rounded-lg bg-emerald-50 p-2 text-xs font-semibold text-emerald-800">
+              Campaña activa actual: -
+            </p>
           </div>
           <div class="lg:col-span-2">
-            <label class="text-xs font-semibold text-zinc-500">Exportar CSV</label>
+            <label class="text-xs font-semibold text-zinc-500">Exportar CSV por campaña</label>
             <div class="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center">
-              <input id="exportDay" type="date" class="w-full rounded-lg border border-zinc-300 p-2.5 sm:w-48" />
               <button id="exportOrdersBtn" class="w-full rounded-lg border border-zinc-300 px-4 py-2 font-medium sm:w-auto">
-                Reservas (detalle)
+                Descargar reservas de campaña
               </button>
               <button id="exportSummaryBtn" class="w-full rounded-lg border border-zinc-300 px-4 py-2 font-medium sm:w-auto">
-                Resumen por clienta
+                Descargar resumen por clienta
               </button>
             </div>
             <p class="mt-2 text-xs text-zinc-500">
-              El filtro de fecha usa zona horaria Chile (America/Santiago). Deja la fecha vacía para exportar todo el rango seleccionado.
+              La exportación usa la campaña seleccionada en el selector de la izquierda.
             </p>
           </div>
         </div>
@@ -59,12 +61,19 @@
 
       <section class="mb-5 rounded-2xl bg-white p-5 shadow-sm">
         <h2 class="text-lg font-semibold">Maestro de productos</h2>
-        <form id="productForm" class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <form id="productForm" class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-7">
           <input id="code" placeholder="Código (A1)" class="rounded-lg border border-zinc-300 p-2.5" required />
           <input id="name" placeholder="Nombre" class="rounded-lg border border-zinc-300 p-2.5" required />
+          <input id="color" placeholder="Color (opcional)" class="rounded-lg border border-zinc-300 p-2.5" />
+          <input id="quantityLabel" placeholder="Cantidad (ej: Set x6)" class="rounded-lg border border-zinc-300 p-2.5" />
           <input id="price" type="number" min="0" placeholder="Precio" class="rounded-lg border border-zinc-300 p-2.5" required />
           <input id="initialStock" type="number" min="0" placeholder="Stock inicial" class="rounded-lg border border-zinc-300 p-2.5" required />
-          <input id="imageUrl" placeholder="URL imagen" class="rounded-lg border border-zinc-300 p-2.5 lg:col-span-2" required />
+          <input id="imageUrl" placeholder="URL imagen" class="rounded-lg border border-zinc-300 p-2.5 lg:col-span-3" required />
+          <textarea
+            id="attributesText"
+            placeholder="Propiedades dinámicas (una por línea):&#10;Material: Cerámica&#10;Capacidad: 350 ml"
+            class="min-h-[96px] rounded-lg border border-zinc-300 p-2.5 lg:col-span-4"
+          ></textarea>
           <button class="rounded-lg bg-black px-4 py-2 font-medium text-white lg:col-span-1">Agregar</button>
         </form>
       </section>
@@ -78,6 +87,7 @@
                 <tr>
                   <th class="py-2">Código</th>
                   <th class="py-2">Nombre</th>
+                  <th class="py-2">Propiedades</th>
                   <th class="py-2">Precio</th>
                   <th class="py-2">Stock</th>
                   <th class="py-2">Estado</th>

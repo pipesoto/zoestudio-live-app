@@ -60,6 +60,19 @@ function formatCLP(value) {
   return new Intl.NumberFormat("es-CL").format(Number(value || 0));
 }
 
+function getDisplayAttributes(product) {
+  const attrs = [];
+  if (product.color) attrs.push({ key: "Color", value: product.color });
+  if (product.quantity_label) attrs.push({ key: "Cantidad", value: product.quantity_label });
+  if (Array.isArray(product.attributes_json)) {
+    for (const item of product.attributes_json) {
+      if (!item?.key || !item?.value) continue;
+      attrs.push({ key: String(item.key), value: String(item.value) });
+    }
+  }
+  return attrs.slice(0, 10);
+}
+
 function notify(message, warning = false) {
   statusBar.textContent = message;
   statusBar.classList.remove("hidden");
@@ -80,6 +93,10 @@ function renderProducts(list) {
       const soldOut = product.current_stock <= 0;
       const safeName = escapeHtml(product.name);
       const safeCode = escapeHtml(product.code);
+      const attrs = getDisplayAttributes(product);
+      const attrsHtml = attrs
+        .map((item) => `<span class="rounded bg-zinc-100 px-2 py-1">${escapeHtml(item.key)}: ${escapeHtml(item.value)}</span>`)
+        .join(" ");
       const safeImageUrl = escapeHtml(product.image_url);
       return `
         <article class="rounded-2xl bg-white p-4 shadow-sm">
@@ -87,6 +104,7 @@ function renderProducts(list) {
           <div class="mt-3">
             <p class="text-xs font-semibold text-zinc-500">${safeCode}</p>
             <h3 class="text-lg font-semibold">${safeName}</h3>
+            ${attrs.length ? `<p class="mt-1 flex flex-wrap gap-1 text-xs text-zinc-600">${attrsHtml}</p>` : ""}
             <p class="mt-1 text-sm">Precio: <span class="font-bold">$ ${formatCLP(product.price)}</span></p>
             <p class="text-sm">Stock: <span class="font-semibold">${product.current_stock}</span></p>
             <button data-id="${product.id}" class="reserve-btn mt-3 w-full rounded-lg py-2 font-medium ${
