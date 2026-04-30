@@ -73,6 +73,30 @@ function normalizeAttributes(raw) {
   return cleaned.slice(0, 12);
 }
 
+function getColorOptions(product) {
+  const options = new Set();
+  const fromColorField = String(product?.color || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  fromColorField.forEach((item) => options.add(item));
+
+  if (Array.isArray(product?.attributes_json)) {
+    for (const attr of product.attributes_json) {
+      const key = String(attr?.key || "").toLowerCase();
+      if (key === "color" || key === "colores") {
+        String(attr?.value || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .forEach((item) => options.add(item));
+      }
+    }
+  }
+
+  return [...options];
+}
+
 function requireAdmin(req, res, next) {
   const token = req.header("x-admin-token");
   if (!token || token !== ADMIN_TOKEN) {
@@ -283,13 +307,16 @@ app.post("/api/public/reserve-batch", async (req, res) => {
   }
 
   const quantities = new Map();
+  const itemSelections = [];
   for (const item of rawItems) {
     const productId = Number(item?.productId);
     const qty = Number(item?.qty || 1);
+    const selectedColor = normalizeText(item?.selectedColor, 60);
     if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(qty) || qty <= 0 || qty > 20) {
       return res.status(400).json({ error: "Productos inválidos en el pedido." });
     }
     quantities.set(productId, (quantities.get(productId) || 0) + qty);
+    itemSelections.push({ productId, qty, selectedColor });
   }
 
   const productIds = [...quantities.keys()];
@@ -310,7 +337,7 @@ app.post("/api/public/reserve-batch", async (req, res) => {
     }
 
     const productResult = await client.query(
-      `SELECT id, code, name, price, current_stock, is_active
+      `SELECT id, code, name, color, quantity_label, attributes_json, price, current_stock, is_active
        FROM products
        WHERE id = ANY($1::bigint[])
        FOR UPDATE`,
@@ -335,9 +362,25 @@ app.post("/api/public/reserve-batch", async (req, res) => {
       }
     }
 
+    for (const item of itemSelections) {
+      const product = productById.get(item.productId);
+      const colorOptions = getColorOptions(product);
+      if (colorOptions.length > 0 && !item.selectedColor) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: `Debes seleccionar color para ${product.code}.` });
+      }
+      if (item.selectedColor && colorOptions.length > 0 && !colorOptions.includes(item.selectedColor)) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: `Color inválido para ${product.code}.` });
+      }
+    }
+
     let total = 0;
     const summaryLines = [];
-    for (const [productId, qty] of quantities.entries()) {
+    for (const item of itemSelections) {
+      const productId = item.productId;
+      const qty = item.qty;
+      const selectedColor = item.selectedColor;
       const product = productById.get(productId);
       await client.query(
         `UPDATE products
@@ -347,16 +390,19 @@ app.post("/api/public/reserve-batch", async (req, res) => {
       );
 
       for (let i = 0; i < qty; i += 1) {
+        const reservedCode = selectedColor ? `${product.code}-${selectedColor}` : product.code;
         await client.query(
           `INSERT INTO orders (campaign_id, product_id, product_code, customer_name, district, reserved_price)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [campaign.id, product.id, product.code, customerName, address, product.price]
+          [campaign.id, product.id, reservedCode, customerName, address, product.price]
         );
       }
 
       const lineTotal = Number(product.price) * qty;
       total += lineTotal;
-      summaryLines.push(`- ${product.code} ${product.name} x${qty} ($ ${lineTotal})`);
+      summaryLines.push(
+        `- ${product.code} ${product.name}${selectedColor ? ` (${selectedColor})` : ""} x${qty} ($ ${lineTotal})`
+      );
     }
 
     await client.query("COMMIT");

@@ -60,6 +60,31 @@ function formatCLP(value) {
   return new Intl.NumberFormat("es-CL").format(Number(value || 0));
 }
 
+function getColorOptions(product) {
+  const options = new Set();
+
+  const fromColorField = String(product.color || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  fromColorField.forEach((item) => options.add(item));
+
+  if (Array.isArray(product.attributes_json)) {
+    for (const attr of product.attributes_json) {
+      const key = String(attr?.key || "").toLowerCase();
+      if (key === "colores" || key === "color" || key === "colores") {
+        String(attr?.value || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .forEach((item) => options.add(item));
+      }
+    }
+  }
+
+  return [...options];
+}
+
 function getDisplayAttributes(product) {
   const attrs = [];
   if (product.color) attrs.push({ key: "Color", value: product.color });
@@ -94,10 +119,25 @@ function renderProducts(list) {
       const safeName = escapeHtml(product.name);
       const safeCode = escapeHtml(product.code);
       const attrs = getDisplayAttributes(product);
+      const colorOptions = getColorOptions(product);
       const attrsHtml = attrs
         .map((item) => `<span class="rounded bg-zinc-100 px-2 py-1">${escapeHtml(item.key)}: ${escapeHtml(item.value)}</span>`)
         .join(" ");
       const safeImageUrl = escapeHtml(product.image_url);
+      const colorSelectHtml =
+        colorOptions.length > 1
+          ? `<select id="color-select-${product.id}" class="mt-2 w-full rounded-lg border border-zinc-300 p-2 text-sm">
+              ${colorOptions
+                .map((color) => `<option value="${escapeHtml(color)}">${escapeHtml(color)}</option>`)
+                .join("")}
+            </select>`
+          : "";
+      const singleColorHtml =
+        colorOptions.length === 1
+          ? `<p class="mt-1 text-xs text-zinc-600">Color seleccionado: <span class="font-semibold">${escapeHtml(
+              colorOptions[0]
+            )}</span></p>`
+          : "";
       return `
         <article class="rounded-2xl bg-white p-4 shadow-sm">
           <img src="${safeImageUrl}" alt="${safeName}" class="h-48 w-full rounded-xl object-cover" />
@@ -107,6 +147,19 @@ function renderProducts(list) {
             ${attrs.length ? `<p class="mt-1 flex flex-wrap gap-1 text-xs text-zinc-600">${attrsHtml}</p>` : ""}
             <p class="mt-1 text-sm">Precio: <span class="font-bold">$ ${formatCLP(product.price)}</span></p>
             <p class="text-sm">Stock: <span class="font-semibold">${product.current_stock}</span></p>
+            ${singleColorHtml}
+            ${colorSelectHtml}
+            <div class="mt-2">
+              <label class="mb-1 block text-xs text-zinc-600">Cantidad</label>
+              <input
+                id="qty-input-${product.id}"
+                type="number"
+                min="1"
+                max="${product.current_stock}"
+                value="1"
+                class="w-full rounded-lg border border-zinc-300 p-2 text-sm"
+              />
+            </div>
             <button data-id="${product.id}" class="reserve-btn mt-3 w-full rounded-lg py-2 font-medium ${
               soldOut ? "bg-zinc-300 text-zinc-600 cursor-not-allowed" : "bg-black text-white"
             }" ${soldOut ? "disabled" : ""}>
@@ -124,15 +177,41 @@ function renderProducts(list) {
       const product = products.find((p) => p.id === id);
       if (!product || product.current_stock <= 0) return;
 
-      const currentQty = order.filter((item) => item.productId === product.id).length;
-      if (currentQty >= product.current_stock) {
-        notify(`No puedes agregar más de ${product.code}, stock disponible alcanzado.`, true);
+      const qtyInput = document.getElementById(`qty-input-${product.id}`);
+      const qty = Number(qtyInput?.value || 1);
+      if (!Number.isInteger(qty) || qty <= 0) {
+        notify("Cantidad inválida.", true);
         return;
       }
 
-      order.push({ productId: product.id, qty: 1 });
+      const colorOptions = getColorOptions(product);
+      let selectedColor = "";
+      if (colorOptions.length > 1) {
+        const colorSelect = document.getElementById(`color-select-${product.id}`);
+        selectedColor = String(colorSelect?.value || "").trim();
+        if (!selectedColor) {
+          notify("Selecciona un color.", true);
+          return;
+        }
+      } else if (colorOptions.length === 1) {
+        selectedColor = colorOptions[0];
+      }
+
+      const currentQty = order
+        .filter((item) => item.productId === product.id)
+        .reduce((sum, item) => sum + Number(item.qty || 0), 0);
+      if (currentQty + qty > product.current_stock) {
+        notify(`No puedes agregar ${qty} unidades de ${product.code}, stock disponible insuficiente.`, true);
+        return;
+      }
+
+      order.push({ productId: product.id, qty, selectedColor });
       renderOrder();
-      notify(`${product.code} agregado a tu pedido.`);
+      notify(
+        `${product.code} agregado (${qty}${
+          selectedColor ? `, ${selectedColor}` : ""
+        }) a tu pedido.`
+      );
     });
   });
 }
@@ -140,9 +219,16 @@ function renderProducts(list) {
 function mergeOrderItems() {
   const merged = new Map();
   for (const item of order) {
-    merged.set(item.productId, (merged.get(item.productId) || 0) + 1);
+    const key = `${item.productId}__${item.selectedColor || ""}`;
+    const current = merged.get(key) || {
+      productId: item.productId,
+      qty: 0,
+      selectedColor: item.selectedColor || ""
+    };
+    current.qty += Number(item.qty || 0);
+    merged.set(key, current);
   }
-  return [...merged.entries()].map(([productId, qty]) => ({ productId, qty }));
+  return [...merged.values()];
 }
 
 function pruneOrderByVisibleProducts() {
@@ -169,12 +255,17 @@ function renderOrder() {
       if (!product) return "";
       const line = Number(product.price) * item.qty;
       total += line;
+      const key = `${item.productId}__${item.selectedColor || ""}`;
+      const encodedKey = encodeURIComponent(key);
       return `
         <div class="flex items-center justify-between rounded-lg border border-zinc-200 p-2">
-          <p>${escapeHtml(product.code)} - ${escapeHtml(product.name)} x${item.qty}</p>
+          <p>
+            ${escapeHtml(product.code)} - ${escapeHtml(product.name)} x${item.qty}
+            ${item.selectedColor ? `<span class="ml-1 text-xs text-zinc-600">(${escapeHtml(item.selectedColor)})</span>` : ""}
+          </p>
           <div class="flex items-center gap-3">
             <span class="font-semibold">$ ${formatCLP(line)}</span>
-            <button data-remove-id="${product.id}" class="text-xs text-red-600 underline">Quitar</button>
+            <button data-remove-key="${encodedKey}" class="text-xs text-red-600 underline">Quitar</button>
           </div>
         </div>
       `;
@@ -182,10 +273,10 @@ function renderOrder() {
     .join("");
   orderTotal.textContent = `$ ${formatCLP(total)}`;
 
-  document.querySelectorAll("[data-remove-id]").forEach((btn) => {
+  document.querySelectorAll("[data-remove-key]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const productId = Number(btn.dataset.removeId);
-      const idx = order.findIndex((item) => item.productId === productId);
+      const key = decodeURIComponent(String(btn.dataset.removeKey || ""));
+      const idx = order.findIndex((item) => `${item.productId}__${item.selectedColor || ""}` === key);
       if (idx >= 0) order.splice(idx, 1);
       renderOrder();
     });
